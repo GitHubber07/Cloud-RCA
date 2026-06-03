@@ -23,3 +23,7 @@ logs/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Learning documentation & local vectors
+learning/
+fasttext_model.vec
