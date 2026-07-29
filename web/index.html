@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RCACopilot Interactive Dashboard</title>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="logo-area">
+                <span class="logo-icon">⚡</span>
+                <div class="logo-text">
+                    <h1>RCACopilot</h1>
+                    <span>Incident Diagnostics</span>
+                </div>
+            </div>
+            
+            <nav class="nav-menu">
+                <button class="nav-btn active" id="btn-dashboard">
+                    <span class="icon">📊</span> Incidents Dashboard
+                </button>
+                <button class="nav-btn" id="btn-builder">
+                    <span class="icon">🌿</span> Workflow Builder
+                </button>
+            </nav>
+
+            <div class="metrics-card">
+                <h3>Global Stats</h3>
+                <div class="metric-row">
+                    <span>Accuracy (Micro-F1)</span>
+                    <strong id="stat-accuracy">0.000</strong>
+                </div>
+                <div class="metric-row">
+                    <span>Total Incidents</span>
+                    <strong id="stat-total">0</strong>
+                </div>
+                <button class="run-btn" id="btn-run-simulation">
+                    <span>🚀</span> Trigger Evaluation Run
+                </button>
+            </div>
+            
+            <div class="connection-status">
+                <span class="status-dot online"></span>
+                <span>H2/PostgreSQL Connected</span>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            
+            <!-- Dashboard View -->
+            <section class="view-section" id="view-dashboard">
+                <div class="view-header">
+                    <h2>Incidents & Telemetry Explorer</h2>
+                    <p>Select an incident to view its detailed diagnostics trace, similarity neighborhood, and LLM explanation.</p>
+                </div>
+
+                <div class="dashboard-grid">
+                    <!-- Incidents List -->
+                    <div class="card incident-list-card">
+                        <div class="card-header">
+                            <h3>Active & Historical Alerts</h3>
+                            <span class="badge" id="incident-count">0 alerts</span>
+                        </div>
+                        <div class="filter-bar">
+                            <input type="text" id="incident-search" placeholder="Search by alert type, ID, or category...">
+                        </div>
+                        <div class="list-container" id="incident-list">
+                            <!-- Populated by JS -->
+                            <div class="empty-state">Loading incidents...</div>
+                        </div>
+                    </div>
+
+                    <!-- Diagnostics details -->
+                    <div class="card details-card" id="details-panel">
+                        <div class="empty-state">Select an incident from the list to view diagnostic breakdown.</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Builder View -->
+            <section class="view-section hidden" id="view-builder">
+                <div class="view-header flex-header">
+                    <div>
+                        <h2>Visual Workflow Graph Editor</h2>
+                        <p>Construct dynamic diagnostic routing trees. Changes take effect on the fly without Java recompilation.</p>
+                    </div>
+                    <div class="selector-actions">
+                        <select id="builder-alert-select">
+                            <option value="ConnectionTimeoutAlert">ConnectionTimeoutAlert</option>
+                            <option value="AuthenticationFailureAlert">AuthenticationFailureAlert</option>
+                            <option value="QueueBacklogAlert">QueueBacklogAlert</option>
+                            <option value="DiskSpaceAlert">DiskSpaceAlert</option>
+                        </select>
+                        <button class="action-btn save-workflow-btn" id="btn-save-workflow">💾 Save Workflow</button>
+                    </div>
+                </div>
+
+                <div class="builder-container">
+                    <!-- Graph Canvas Area -->
+                    <div class="canvas-wrapper">
+                        <div class="canvas-toolbar">
+                            <button class="tool-btn" id="btn-add-query">➕ Query Node</button>
+                            <button class="tool-btn" id="btn-add-scope">➕ Scope Node</button>
+                            <button class="tool-btn" id="btn-add-mitigation">➕ Mitigation Node</button>
+                            <button class="tool-btn secondary" id="btn-reset-layout">🧹 Auto-Layout</button>
+                        </div>
+                        <div class="flow-canvas" id="flow-canvas">
+                            <svg class="canvas-svg" id="canvas-svg"></svg>
+                            <!-- Nodes will be injected here -->
+                        </div>
+                    </div>
+
+                    <!-- Sidebar Inspector -->
+                    <div class="card inspector-card" id="inspector-panel">
+                        <div class="card-header">
+                            <h3>Inspector</h3>
+                        </div>
+                        <div id="inspector-content">
+                            <div class="empty-state">Select a node on the canvas to configure it.</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Notification Toast -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

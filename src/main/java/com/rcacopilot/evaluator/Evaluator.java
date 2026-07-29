@@ -7,68 +7,137 @@ import com.rcacopilot.model.TelemetryLog;
 import com.rcacopilot.similarity.FastTextEmbedder;
 import com.rcacopilot.similarity.TemporalSimilaritySearch;
 import com.rcacopilot.workflow.*;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 
 import java.sql.SQLException;
 import java.util.*;
 
 public class Evaluator {
-    private final Map<String, IncidentHandler> handlers;
     private final Map<String, String> summaryCache = new HashMap<>();
+    
+    private static final Gson GSON = new GsonBuilder()
+            .registerTypeAdapter(Action.class, new ActionDeserializer())
+            .create();
 
     public Evaluator() {
-        this.handlers = new HashMap<>();
-        setupWorkflowHandlers();
     }
 
-    private void setupWorkflowHandlers() {
-        // Define programmatic workflows for the alerts:
-        
-        // 1. ConnectionTimeoutAlert Handler
-        IncidentHandler connHandler = new IncidentHandler("ConnectionTimeoutAlert", "QUERY_SOCKETS");
-        connHandler.addAction(new QueryAction("QUERY_SOCKETS", "socket_metrics", "QUERY_PROBE"));
-        connHandler.addAction(new QueryAction("QUERY_PROBE", "probe", "MITIGATE_CONN"));
-        connHandler.addAction(new MitigationAction("MITIGATE_CONN", "Restart Transport proxy service to release ports."));
-        handlers.put(connHandler.getAlertType(), connHandler);
+    public static IncidentHandler deserializeHandler(String alertType, String startActionId, String actionsJson) {
+        IncidentHandler handler = new IncidentHandler(alertType, startActionId);
+        Action[] actions = GSON.fromJson(actionsJson, Action[].class);
+        if (actions != null) {
+            for (Action action : actions) {
+                handler.addAction(action);
+            }
+        }
+        return handler;
+    }
 
-        // 2. AuthenticationFailureAlert Handler
-        IncidentHandler authHandler = new IncidentHandler("AuthenticationFailureAlert", "QUERY_EXCEPTIONS");
-        authHandler.addAction(new QueryAction("QUERY_EXCEPTIONS", "exceptions", "QUERY_PROBE"));
-        authHandler.addAction(new QueryAction("QUERY_PROBE", "probe", "MITIGATE_AUTH"));
-        authHandler.addAction(new MitigationAction("MITIGATE_AUTH", "Re-provision authentication credentials and refresh certificates."));
-        handlers.put(authHandler.getAlertType(), authHandler);
+    public static String serializeActions(IncidentHandler handler) {
+        return GSON.toJson(handler.getActions().values());
+    }
 
-        // 3. QueueBacklogAlert Handler
-        IncidentHandler queueHandler = new IncidentHandler("QueueBacklogAlert", "QUERY_EXCEPTIONS");
-        queueHandler.addAction(new QueryAction("QUERY_EXCEPTIONS", "exceptions", "QUERY_THREADS"));
-        queueHandler.addAction(new QueryAction("QUERY_THREADS", "thread_stacks", "QUERY_CONFIG"));
-        queueHandler.addAction(new QueryAction("QUERY_CONFIG", "config", "MITIGATE_QUEUE"));
-        queueHandler.addAction(new MitigationAction("MITIGATE_QUEUE", "Run delivery queue clearance and identify blocking database logs."));
-        handlers.put(queueHandler.getAlertType(), queueHandler);
+    public static IncidentHandler getWorkflowHandler(String alertType, DatabaseManager db) throws SQLException {
+        DatabaseManager.WorkflowData data = db.getWorkflowHandler(alertType);
+        if (data != null) {
+            return deserializeHandler(data.alertType, data.startActionId, data.actionsJson);
+        }
+        return null;
+    }
 
-        // 4. DiskSpaceAlert Handler
-        IncidentHandler diskHandler = new IncidentHandler("DiskSpaceAlert", "QUERY_EXCEPTIONS");
-        diskHandler.addAction(new QueryAction("QUERY_EXCEPTIONS", "exceptions", "QUERY_PROBE"));
-        diskHandler.addAction(new QueryAction("QUERY_PROBE", "probe", "MITIGATE_DISK"));
-        diskHandler.addAction(new MitigationAction("MITIGATE_DISK", "Execute log rotation scripts and purge temporary dump files."));
-        handlers.put(diskHandler.getAlertType(), diskHandler);
+    public void seedDefaultWorkflows(DatabaseManager db) throws SQLException {
+        if (db.getAllWorkflowHandlers().isEmpty()) {
+            System.out.println("Seeding default workflow handlers into the database...");
+            
+            // 1. ConnectionTimeoutAlert
+            IncidentHandler connHandler = new IncidentHandler("ConnectionTimeoutAlert", "QUERY_SOCKETS");
+            connHandler.addAction(new QueryAction("QUERY_SOCKETS", "socket_metrics", "QUERY_PROBE"));
+            connHandler.addAction(new QueryAction("QUERY_PROBE", "probe", "MITIGATE_CONN"));
+            connHandler.addAction(new MitigationAction("MITIGATE_CONN", "Restart Transport proxy service to release ports."));
+            db.saveWorkflowHandler(connHandler.getAlertType(), connHandler.getStartActionId(), serializeActions(connHandler));
+
+            // 2. AuthenticationFailureAlert
+            IncidentHandler authHandler = new IncidentHandler("AuthenticationFailureAlert", "QUERY_EXCEPTIONS");
+            authHandler.addAction(new QueryAction("QUERY_EXCEPTIONS", "exceptions", "QUERY_PROBE"));
+            authHandler.addAction(new QueryAction("QUERY_PROBE", "probe", "MITIGATE_AUTH"));
+            authHandler.addAction(new MitigationAction("MITIGATE_AUTH", "Re-provision authentication credentials and refresh certificates."));
+            db.saveWorkflowHandler(authHandler.getAlertType(), authHandler.getStartActionId(), serializeActions(authHandler));
+
+            // 3. QueueBacklogAlert
+            IncidentHandler queueHandler = new IncidentHandler("QueueBacklogAlert", "QUERY_EXCEPTIONS");
+            queueHandler.addAction(new QueryAction("QUERY_EXCEPTIONS", "exceptions", "QUERY_THREADS"));
+            queueHandler.addAction(new QueryAction("QUERY_THREADS", "thread_stacks", "QUERY_CONFIG"));
+            queueHandler.addAction(new QueryAction("QUERY_CONFIG", "config", "MITIGATE_QUEUE"));
+            queueHandler.addAction(new MitigationAction("MITIGATE_QUEUE", "Run delivery queue clearance and identify blocking database logs."));
+            db.saveWorkflowHandler(queueHandler.getAlertType(), queueHandler.getStartActionId(), serializeActions(queueHandler));
+
+            // 4. DiskSpaceAlert
+            IncidentHandler diskHandler = new IncidentHandler("DiskSpaceAlert", "QUERY_EXCEPTIONS");
+            diskHandler.addAction(new QueryAction("QUERY_EXCEPTIONS", "exceptions", "QUERY_PROBE"));
+            diskHandler.addAction(new QueryAction("QUERY_PROBE", "probe", "MITIGATE_DISK"));
+            diskHandler.addAction(new MitigationAction("MITIGATE_DISK", "Execute log rotation scripts and purge temporary dump files."));
+            db.saveWorkflowHandler(diskHandler.getAlertType(), diskHandler.getStartActionId(), serializeActions(diskHandler));
+            
+            System.out.println("Default workflow handlers seeded successfully.");
+        }
     }
 
     /**
      * Runs the evaluation pipeline over test incidents and prints performance metrics.
      */
-    public void evaluate(
+    public static class EvaluationResult {
+        public final double microF1;
+        public final double macroF1;
+
+        public EvaluationResult(double microF1, double macroF1) {
+            this.microF1 = microF1;
+            this.macroF1 = macroF1;
+        }
+    }
+
+    public EvaluationResult evaluate(
             List<Incident> testIncidents,
             List<Incident> historicalIncidents,
             DatabaseManager db,
             FastTextEmbedder embedder,
             LlmClient llm) throws Exception {
+        return evaluate(testIncidents, historicalIncidents, db, embedder, llm, 5, 0.3, false);
+    }
 
-        System.out.println("\n=======================================================");
-        System.out.println("            RCACopilot Simulation Evaluation           ");
-        System.out.println("=======================================================");
-        System.out.println("Test Set Size: " + testIncidents.size());
-        System.out.println("History Set Size: " + historicalIncidents.size());
-        System.out.println("-------------------------------------------------------\n");
+    public EvaluationResult evaluate(
+            List<Incident> testIncidents,
+            List<Incident> historicalIncidents,
+            DatabaseManager db,
+            FastTextEmbedder embedder,
+            LlmClient llm,
+            int K,
+            double alpha) throws Exception {
+        return evaluate(testIncidents, historicalIncidents, db, embedder, llm, K, alpha, false);
+    }
+
+    public EvaluationResult evaluate(
+            List<Incident> testIncidents,
+            List<Incident> historicalIncidents,
+            DatabaseManager db,
+            FastTextEmbedder embedder,
+            LlmClient llm,
+            int K,
+            double alpha,
+            boolean silent) throws Exception {
+
+        // Ensure default workflows are seeded in the database before running evaluation
+        seedDefaultWorkflows(db);
+
+        if (!silent) {
+            System.out.println("\n=======================================================");
+            System.out.println("            RCACopilot Simulation Evaluation           ");
+            System.out.println("=======================================================");
+            System.out.println("Test Set Size: " + testIncidents.size());
+            System.out.println("History Set Size: " + historicalIncidents.size());
+            System.out.println("Parameters: K=" + K + ", Alpha=" + alpha);
+            System.out.println("-------------------------------------------------------\n");
+        }
 
         int correctPredictions = 0;
         int totalTestCount = testIncidents.size();
@@ -79,12 +148,16 @@ public class Evaluator {
         Map<String, Integer> falseNegatives = new HashMap<>();
 
         for (Incident target : testIncidents) {
-            System.out.println("Diagnosing incident: " + target.getId() + " [Alert: " + target.getAlertType() + "]");
+            if (!silent) {
+                System.out.println("Diagnosing incident: " + target.getId() + " [Alert: " + target.getAlertType() + "]");
+            }
 
             // 1. Diagnostic Data Collection
-            IncidentHandler handler = handlers.get(target.getAlertType());
+            IncidentHandler handler = getWorkflowHandler(target.getAlertType(), db);
             if (handler == null) {
-                System.out.println("  [Skip] No workflow handler registered for alert type: " + target.getAlertType());
+                if (!silent) {
+                    System.out.println("  [Skip] No workflow handler registered in DB for alert type: " + target.getAlertType());
+                }
                 totalTestCount--;
                 continue;
             }
@@ -97,7 +170,7 @@ public class Evaluator {
 
             // 3. Similarity Search & Retrieval
             List<Incident> neighbors = TemporalSimilaritySearch.findNearestNeighbors(
-                    target, historicalIncidents, db, embedder, 5, 0.3
+                    target, historicalIncidents, db, embedder, K, alpha
             );
 
             // 4. Construct Options & Prompt for Predictor
@@ -115,11 +188,13 @@ public class Evaluator {
             // Update database record
             db.updatePrediction(target.getId(), predictedCategory, predictionOutput);
 
-            System.out.println("  True Category     : " + target.getTrueCategory());
-            System.out.println("  Predicted Category: " + predictedCategory);
-            System.out.println("  Outcome           : " + (predictedCategory.equalsIgnoreCase(target.getTrueCategory()) ? "✔ SUCCESS" : "✘ FAILED"));
-            System.out.println("  Reasoning Snippet : " + getSnippet(predictionOutput));
-            System.out.println("-------------------------------------------------------");
+            if (!silent) {
+                System.out.println("  True Category     : " + target.getTrueCategory());
+                System.out.println("  Predicted Category: " + predictedCategory);
+                System.out.println("  Outcome           : " + (predictedCategory.equalsIgnoreCase(target.getTrueCategory()) ? "✔ SUCCESS" : "✘ FAILED"));
+                System.out.println("  Reasoning Snippet : " + getSnippet(predictionOutput));
+                System.out.println("-------------------------------------------------------");
+            }
 
             // Update confusion metrics
             String trueCat = target.getTrueCategory();
@@ -135,21 +210,25 @@ public class Evaluator {
         }
 
         // Calculate and Print final Accuracy Metrics
-        double microF1 = (double) correctPredictions / totalTestCount;
+        double microF1 = totalTestCount > 0 ? (double) correctPredictions / totalTestCount : 0.0;
         
-        System.out.println("\n=======================================================");
-        System.out.println("                 FINAL EVALUATION SUMMARY              ");
-        System.out.println("=======================================================");
-        System.out.printf("Accuracy (Micro-F1): %.3f\n", microF1);
+        if (!silent) {
+            System.out.println("\n=======================================================");
+            System.out.println("                 FINAL EVALUATION SUMMARY              ");
+            System.out.println("=======================================================");
+            System.out.printf("Accuracy (Micro-F1): %.3f\n", microF1);
+        }
 
         // Compute Macro-F1
         double macroF1Sum = 0.0;
         int categoryCount = 0;
         Set<String> allCategories = new HashSet<>(Arrays.asList("HubPortExhaustion", "AuthCertIssue", "DeliveryHang", "FullDisk", "InvalidJournaling"));
 
-        System.out.println("\nCategory Level Metrics:");
-        System.out.printf("%-20s | %-10s | %-10s | %-10s\n", "Category", "Precision", "Recall", "F1-Score");
-        System.out.println("---------------------|------------|------------|------------");
+        if (!silent) {
+            System.out.println("\nCategory Level Metrics:");
+            System.out.printf("%-20s | %-10s | %-10s | %-10s\n", "Category", "Precision", "Recall", "F1-Score");
+            System.out.println("---------------------|------------|------------|------------");
+        }
 
         for (String cat : allCategories) {
             int tp = truePositives.getOrDefault(cat, 0);
@@ -163,13 +242,19 @@ public class Evaluator {
             macroF1Sum += f1;
             categoryCount++;
 
-            System.out.printf("%-20s | %-10.3f | %-10.3f | %-10.3f\n", cat, precision, recall, f1);
+            if (!silent) {
+                System.out.printf("%-20s | %-10.3f | %-10.3f | %-10.3f\n", cat, precision, recall, f1);
+            }
         }
 
         double macroF1 = macroF1Sum / categoryCount;
-        System.out.println("-------------------------------------------------------");
-        System.out.printf("Average Macro-F1   : %.3f\n", macroF1);
-        System.out.println("=======================================================\n");
+        if (!silent) {
+            System.out.println("-------------------------------------------------------");
+            System.out.printf("Average Macro-F1   : %.3f\n", macroF1);
+            System.out.println("=======================================================\n");
+        }
+
+        return new EvaluationResult(microF1, macroF1);
     }
 
     private String getCachedSummary(String id, String text, LlmClient llm) throws Exception {

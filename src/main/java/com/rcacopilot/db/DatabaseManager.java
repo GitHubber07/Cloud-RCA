@@ -16,25 +16,36 @@ public class DatabaseManager {
     private final String dbUser;
     private final String dbPassword;
 
+    public static class WorkflowData {
+        public String alertType;
+        public String startActionId;
+        public String actionsJson;
+    }
+
     public DatabaseManager() {
-        this.dbUrl = System.getenv("SUPABASE_DB_URL");
-        this.dbUser = System.getenv("SUPABASE_DB_USER");
-        this.dbPassword = System.getenv("SUPABASE_DB_PASSWORD");
+        String envUrl = System.getenv("SUPABASE_DB_URL");
+        String envUser = System.getenv("SUPABASE_DB_USER");
+        String envPassword = System.getenv("SUPABASE_DB_PASSWORD");
 
-        // Validate environment configuration
-        if (dbUrl == null || dbUser == null || dbPassword == null) {
-            throw new IllegalStateException("Database configuration missing!\n" +
-                    "Please set the following environment variables:\n" +
-                    "  - SUPABASE_DB_URL (e.g. jdbc:postgresql://<host>:<port>/<db>)\n" +
-                    "  - SUPABASE_DB_USER\n" +
-                    "  - SUPABASE_DB_PASSWORD");
-        }
-
-        // Pre-load PostgreSQL Driver explicitly to guarantee availability
-        try {
-            Class.forName("org.postgresql.Driver");
-        } catch (ClassNotFoundException e) {
-            throw new RuntimeException("PostgreSQL JDBC Driver not found on the classpath!", e);
+        if (envUrl == null || envUser == null || envPassword == null) {
+            System.out.println("[DatabaseManager] Database environment variables missing. Falling back to local H2 database.");
+            this.dbUrl = "jdbc:h2:./h2_rca_db;MODE=PostgreSQL;DATABASE_TO_UPPER=FALSE;CASE_INSENSITIVE_IDENTIFIERS=TRUE";
+            this.dbUser = "sa";
+            this.dbPassword = "";
+            try {
+                Class.forName("org.h2.Driver");
+            } catch (ClassNotFoundException e) {
+                throw new RuntimeException("H2 JDBC Driver not found on the classpath! Please check if H2 is added to pom.xml.", e);
+            }
+        } else {
+            this.dbUrl = envUrl;
+            this.dbUser = envUser;
+            this.dbPassword = envPassword;
+            try {
+                Class.forName("org.postgresql.Driver");
+            } catch (ClassNotFoundException e) {
+                throw new RuntimeException("PostgreSQL JDBC Driver not found on the classpath!", e);
+            }
         }
     }
 
@@ -50,16 +61,24 @@ public class DatabaseManager {
      */
     public void initializeSchema(String schemaFilePath) throws SQLException, IOException {
         String schemaContent = new String(Files.readAllBytes(Paths.get(schemaFilePath)));
-        // Split SQL statements by semicolon, excluding comments
+        // Split SQL statements by semicolon
         String[] statements = schemaContent.split(";");
 
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement()) {
             for (String sql : statements) {
-                String trimmedSql = sql.trim();
-                // Skip empty blocks or commentary lines
-                if (!trimmedSql.isEmpty() && !trimmedSql.startsWith("--")) {
-                    stmt.execute(trimmedSql);
+                // Filter out comment lines from the statement
+                StringBuilder cleanSql = new StringBuilder();
+                String[] lines = sql.split("\n");
+                for (String line : lines) {
+                    String trimmedLine = line.trim();
+                    if (!trimmedLine.startsWith("--")) {
+                        cleanSql.append(line).append("\n");
+                    }
+                }
+                String finalSql = cleanSql.toString().trim();
+                if (!finalSql.isEmpty()) {
+                    stmt.execute(finalSql);
                 }
             }
         }
@@ -69,23 +88,44 @@ public class DatabaseManager {
      * Inserts an incident into the database.
      */
     public void insertIncident(Incident incident) throws SQLException {
-        String sql = "INSERT INTO incidents (id, timestamp, alert_type, title, true_category, predicted_category, explanation) " +
-                     "VALUES (?, ?, ?, ?, ?, ?, ?) " +
-                     "ON CONFLICT (id) DO UPDATE SET " +
-                     "timestamp = EXCLUDED.timestamp, alert_type = EXCLUDED.alert_type, title = EXCLUDED.title, " +
-                     "true_category = EXCLUDED.true_category, predicted_category = EXCLUDED.predicted_category, " +
-                     "explanation = EXCLUDED.explanation";
+        String selectSql = "SELECT 1 FROM incidents WHERE id = ?";
+        String updateSql = "UPDATE incidents SET timestamp = ?, alert_type = ?, title = ?, true_category = ?, predicted_category = ?, explanation = ? WHERE id = ?";
+        String insertSql = "INSERT INTO incidents (id, timestamp, alert_type, title, true_category, predicted_category, explanation) VALUES (?, ?, ?, ?, ?, ?, ?)";
 
-        try (Connection conn = getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, incident.getId());
-            pstmt.setTimestamp(2, Timestamp.from(incident.getTimestamp()));
-            pstmt.setString(3, incident.getAlertType());
-            pstmt.setString(4, incident.getTitle());
-            pstmt.setString(5, incident.getTrueCategory());
-            pstmt.setString(6, incident.getPredictedCategory());
-            pstmt.setString(7, incident.getExplanation());
-            pstmt.executeUpdate();
+        try (Connection conn = getConnection()) {
+            boolean exists = false;
+            try (PreparedStatement pstmt = conn.prepareStatement(selectSql)) {
+                pstmt.setString(1, incident.getId());
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        exists = true;
+                    }
+                }
+            }
+
+            if (exists) {
+                try (PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
+                    pstmt.setTimestamp(1, Timestamp.from(incident.getTimestamp()));
+                    pstmt.setString(2, incident.getAlertType());
+                    pstmt.setString(3, incident.getTitle());
+                    pstmt.setString(4, incident.getTrueCategory());
+                    pstmt.setString(5, incident.getPredictedCategory());
+                    pstmt.setString(6, incident.getExplanation());
+                    pstmt.setString(7, incident.getId());
+                    pstmt.executeUpdate();
+                }
+            } else {
+                try (PreparedStatement pstmt = conn.prepareStatement(insertSql)) {
+                    pstmt.setString(1, incident.getId());
+                    pstmt.setTimestamp(2, Timestamp.from(incident.getTimestamp()));
+                    pstmt.setString(3, incident.getAlertType());
+                    pstmt.setString(4, incident.getTitle());
+                    pstmt.setString(5, incident.getTrueCategory());
+                    pstmt.setString(6, incident.getPredictedCategory());
+                    pstmt.setString(7, incident.getExplanation());
+                    pstmt.executeUpdate();
+                }
+            }
         }
     }
 
@@ -178,7 +218,92 @@ public class DatabaseManager {
     public void clearDatabase() throws SQLException {
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement()) {
-            stmt.executeUpdate("TRUNCATE TABLE telemetry_logs, incidents CASCADE");
+            try {
+                stmt.executeUpdate("TRUNCATE TABLE telemetry_logs, incidents CASCADE");
+            } catch (SQLException e) {
+                // Fallback for H2 or engines that don't support multi-table cascade truncate
+                stmt.executeUpdate("DELETE FROM telemetry_logs");
+                stmt.executeUpdate("DELETE FROM incidents");
+                stmt.executeUpdate("DELETE FROM workflow_handlers");
+            }
         }
+    }
+
+    /**
+     * Saves or updates a workflow handler.
+     */
+    public void saveWorkflowHandler(String alertType, String startActionId, String actionsJson) throws SQLException {
+        String selectSql = "SELECT 1 FROM workflow_handlers WHERE alert_type = ?";
+        String updateSql = "UPDATE workflow_handlers SET start_action_id = ?, actions = ? WHERE alert_type = ?";
+        String insertSql = "INSERT INTO workflow_handlers (alert_type, start_action_id, actions) VALUES (?, ?, ?)";
+
+        try (Connection conn = getConnection()) {
+            boolean exists = false;
+            try (PreparedStatement pstmt = conn.prepareStatement(selectSql)) {
+                pstmt.setString(1, alertType);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        exists = true;
+                    }
+                }
+            }
+
+            if (exists) {
+                try (PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
+                    pstmt.setString(1, startActionId);
+                    pstmt.setString(2, actionsJson);
+                    pstmt.setString(3, alertType);
+                    pstmt.executeUpdate();
+                }
+            } else {
+                try (PreparedStatement pstmt = conn.prepareStatement(insertSql)) {
+                    pstmt.setString(1, alertType);
+                    pstmt.setString(2, startActionId);
+                    pstmt.setString(3, actionsJson);
+                    pstmt.executeUpdate();
+                }
+            }
+        }
+    }
+
+    /**
+     * Fetches a workflow handler from the database.
+     */
+    public WorkflowData getWorkflowHandler(String alertType) throws SQLException {
+        String sql = "SELECT start_action_id, actions FROM workflow_handlers WHERE alert_type = ?";
+        try (Connection conn = getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, alertType);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    WorkflowData data = new WorkflowData();
+                    data.alertType = alertType;
+                    data.startActionId = rs.getString("start_action_id");
+                    data.actionsJson = rs.getString("actions");
+                    return data;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Fetches all workflow handlers from the database.
+     */
+    public List<WorkflowData> getAllWorkflowHandlers() throws SQLException {
+        List<WorkflowData> list = new ArrayList<>();
+        String sql = "SELECT alert_type, start_action_id, actions FROM workflow_handlers";
+        try (Connection conn = getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql);
+             ResultSet rs = pstmt.executeQuery()) {
+            while (rs.next()) {
+                WorkflowData data = new WorkflowData();
+                data.alertType = rs.getString("alert_type");
+                data.startActionId = rs.getString("start_action_id");
+                data.actionsJson = rs.getString("actions");
+                list.add(data);
+            }
+        }
+        return list;
     }
 }

@@ -27,3 +27,7 @@ Desktop.ini
 # Learning documentation & local vectors
 learning/
 fasttext_model.vec
+
+# Databases
+*.mv.db
+*.trace.db

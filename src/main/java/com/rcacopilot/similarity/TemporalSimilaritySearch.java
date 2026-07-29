@@ -52,6 +52,23 @@ public class TemporalSimilaritySearch {
      * Finds the top K nearest neighbors from different root cause categories.
      * This guarantees category diversity in the few-shot demonstration prompt.
      */
+    private static final Map<String, String> logCache = new HashMap<>();
+    private static final Map<String, double[]> vectorCache = new HashMap<>();
+
+    private static String getCachedLogsText(String incidentId, DatabaseManager db) throws SQLException {
+        if (!logCache.containsKey(incidentId)) {
+            logCache.put(incidentId, getAggregatedLogsText(incidentId, db));
+        }
+        return logCache.get(incidentId);
+    }
+
+    private static double[] getCachedVector(String incidentId, String logsText, FastTextEmbedder embedder) {
+        if (!vectorCache.containsKey(incidentId)) {
+            vectorCache.put(incidentId, embedder.getSentenceVector(logsText));
+        }
+        return vectorCache.get(incidentId);
+    }
+
     public static List<Incident> findNearestNeighbors(
             Incident targetIncident,
             List<Incident> historicalIncidents,
@@ -61,8 +78,8 @@ public class TemporalSimilaritySearch {
             double alpha) throws SQLException {
 
         // Get diagnostic text and embedding for the target incident
-        String targetLogs = getAggregatedLogsText(targetIncident.getId(), db);
-        double[] targetEmbedding = embedder.getSentenceVector(targetLogs);
+        String targetLogs = getCachedLogsText(targetIncident.getId(), db);
+        double[] targetEmbedding = getCachedVector(targetIncident.getId(), targetLogs, embedder);
 
         class ScoredIncident {
             final Incident incident;
@@ -82,8 +99,8 @@ public class TemporalSimilaritySearch {
                 continue;
             }
 
-            String histLogs = getAggregatedLogsText(hist.getId(), db);
-            double[] histEmbedding = embedder.getSentenceVector(histLogs);
+            String histLogs = getCachedLogsText(hist.getId(), db);
+            double[] histEmbedding = getCachedVector(hist.getId(), histLogs, embedder);
 
             double score = calculateSimilarity(
                     targetEmbedding, targetIncident.getTimestamp(),

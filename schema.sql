@@ -3,6 +3,7 @@
 -- Drop tables if they exist to allow clean recreations
 DROP TABLE IF EXISTS telemetry_logs CASCADE;
 DROP TABLE IF EXISTS incidents CASCADE;
+DROP TABLE IF EXISTS workflow_handlers CASCADE;
 
 -- Table to store incident metadata and final predictions
 CREATE TABLE incidents (
@@ -23,6 +24,13 @@ CREATE TABLE telemetry_logs (
     log_level VARCHAR(20) NOT NULL, -- e.g., 'INFO', 'WARN', 'ERROR'
     message TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+-- Table to store workflow handlers (JSON list of Action nodes)
+CREATE TABLE workflow_handlers (
+    alert_type VARCHAR(100) PRIMARY KEY,
+    start_action_id VARCHAR(100) NOT NULL,
+    actions TEXT NOT NULL
 );
 
 -- Indices for faster similarity search retrieval and lookups

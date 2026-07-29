@@ -17,6 +17,8 @@ public class IncidentHandler {
     }
 
     public String getAlertType() { return alertType; }
+    public String getStartActionId() { return startActionId; }
+    public Map<String, Action> getActions() { return actions; }
 
     public void addAction(Action action) {
         actions.put(action.getId(), action);
